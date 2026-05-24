@@ -44,5 +44,7 @@ Thumbs.db
 *.temp
 *.class
 
+.agents/
+
 
 /temp_doc

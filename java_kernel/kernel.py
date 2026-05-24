@@ -26,6 +26,13 @@ class JavaKernel(Kernel):
     }
     banner = "Java Wrapper Kernel - Execute Java code in Jupyter"
     
+    _CLASS_PATTERN = re.compile(r'class\s+(\w+)')
+    _PUBLIC_CLASS_PATTERN = re.compile(r'public\s+class\s+(\w+)')
+    _PACKAGE_PATTERN = re.compile(r'^\s*package\s+[a-zA-Z_][a-zA-Z0-9_.]*\s*;', re.MULTILINE)
+    _MAIN_METHOD_PATTERN = re.compile(r'public\s+static\s+void\s+main')
+    
+    EXECUTION_TIMEOUT = 30
+    
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._check_java_installation()
@@ -61,12 +68,12 @@ class JavaKernel(Kernel):
     def _extract_class_name(self, code):
         """Extract the main class name from Java code"""
         # Look for public class definition
-        match = re.search(r'public\s+class\s+(\w+)', code)
+        match = self._PUBLIC_CLASS_PATTERN.search(code)
         if match:
             return match.group(1)
         
         # Look for any class definition
-        match = re.search(r'class\s+(\w+)', code)
+        match = self._CLASS_PATTERN.search(code)
         if match:
             return match.group(1)
             
@@ -75,10 +82,13 @@ class JavaKernel(Kernel):
     
     def _wrap_code_in_class(self, code):
         """Wrap code snippet in a main class if needed"""
+        # Remove package declarations since they conflict with flat compilation
+        code = self._PACKAGE_PATTERN.sub('', code)
+        
         # Check if code already has a class definition
-        if re.search(r'class\s+\w+', code):
+        if self._CLASS_PATTERN.search(code):
             # Check if it has a main method
-            if 'public static void main' not in code:
+            if not self._MAIN_METHOD_PATTERN.search(code):
                 # Add main method if missing
                 lines = code.split('\n')
                 # Find the class body and insert main method
@@ -145,9 +155,13 @@ class JavaKernel(Kernel):
                 ['javac', java_file],
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=self.EXECUTION_TIMEOUT,
                 cwd=tmpdir
             )
+            
+            # Clean up the .java source file to keep temp directory tidy
+            if os.path.exists(java_file):
+                os.remove(java_file)
             
             if compile_result.returncode != 0:
                 if not silent:
@@ -170,7 +184,7 @@ class JavaKernel(Kernel):
                 ['java', '-cp', tmpdir, class_name],
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=self.EXECUTION_TIMEOUT
             )
             
             if not silent:
@@ -201,7 +215,7 @@ class JavaKernel(Kernel):
             if not silent:
                 self.send_response(self.iopub_socket, 'stream', {
                     'name': 'stderr',
-                    'text': 'Execution timed out (30 seconds limit)'
+                    'text': f'Execution timed out ({self.EXECUTION_TIMEOUT} seconds limit)'
                 })
             
             return {
@@ -209,7 +223,7 @@ class JavaKernel(Kernel):
                 'execution_count': self.execution_count,
                 'ename': 'TimeoutError',
                 'evalue': 'Execution exceeded time limit',
-                'traceback': ['Execution timed out after 30 seconds']
+                'traceback': [f'Execution timed out after {self.EXECUTION_TIMEOUT} seconds']
             }
         
         except FileNotFoundError as e:
