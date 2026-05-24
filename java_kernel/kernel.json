@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "python",
+    "-m",
+    "java_kernel",
+    "-f",
+    "{connection_file}"
+  ],
+  "display_name": "Java",
+  "language": "java",
+  "interrupt_mode": "signal",
+  "env": {}
+}
