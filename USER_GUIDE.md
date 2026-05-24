@@ -1,4 +1,4 @@
-# Java Kernel User Guide
+# COFFEE - Java Kernel User Guide
 
 **What you'll build**: A solid understanding of how to write, execute, and debug Java code within interactive Jupyter Notebooks.
 
