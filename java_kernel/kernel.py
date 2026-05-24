@@ -30,6 +30,14 @@ class JavaKernel(Kernel):
         super().__init__(**kwargs)
         self._check_java_installation()
         self.class_counter = 0
+        # Reusing the temp directory avoids creating/destroying directories per cell execution
+        # and allows later cells to reference classes compiled in earlier cells
+        self.temp_dir = tempfile.TemporaryDirectory()
+        
+    def do_shutdown(self, restart):
+        """Clean up the temporary directory on shutdown"""
+        self.temp_dir.cleanup()
+        return super().do_shutdown(restart)
         
     def _check_java_installation(self):
         """Check if Java is installed and available"""
@@ -123,100 +131,101 @@ class JavaKernel(Kernel):
         if not class_name:
             class_name = f'JupyterJava{self.class_counter}'
         
-        # Create temporary directory for compilation
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Write Java file
-            java_file = os.path.join(tmpdir, f'{class_name}.java')
-            with open(java_file, 'w', encoding='utf-8') as f:
-                f.write(full_code)
+        # Use persisting temporary directory for compilation classes
+        tmpdir = self.temp_dir.name
+        
+        # Write Java file
+        java_file = os.path.join(tmpdir, f'{class_name}.java')
+        with open(java_file, 'w', encoding='utf-8') as f:
+            f.write(full_code)
+        
+        # Compile Java code
+        try:
+            compile_result = subprocess.run(
+                ['javac', java_file],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                cwd=tmpdir
+            )
             
-            # Compile Java code
-            try:
-                compile_result = subprocess.run(
-                    ['javac', java_file],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                    cwd=tmpdir
-                )
-                
-                if compile_result.returncode != 0:
-                    if not silent:
-                        error_message = compile_result.stderr
-                        self.send_response(self.iopub_socket, 'stream', {
-                            'name': 'stderr',
-                            'text': f'Compilation Error:\n{error_message}'
-                        })
-                    
-                    return {
-                        'status': 'error',
-                        'execution_count': self.execution_count,
-                        'ename': 'CompilationError',
-                        'evalue': 'Java compilation failed',
-                        'traceback': [compile_result.stderr]
-                    }
-                
-                # Run compiled Java code
-                run_result = subprocess.run(
-                    ['java', '-cp', tmpdir, class_name],
-                    capture_output=True,
-                    text=True,
-                    timeout=30
-                )
-                
+            if compile_result.returncode != 0:
                 if not silent:
-                    # Send stdout
-                    if run_result.stdout:
-                        self.send_response(self.iopub_socket, 'stream', {
-                            'name': 'stdout',
-                            'text': run_result.stdout
-                        })
-                    
-                    # Send stderr
-                    if run_result.stderr:
-                        self.send_response(self.iopub_socket, 'stream', {
-                            'name': 'stderr',
-                            'text': run_result.stderr
-                        })
-                
-                if run_result.returncode != 0:
-                    return {
-                        'status': 'error',
-                        'execution_count': self.execution_count,
-                        'ename': 'RuntimeError',
-                        'evalue': 'Java execution failed',
-                        'traceback': [run_result.stderr]
-                    }
-                
-            except subprocess.TimeoutExpired:
-                if not silent:
+                    error_message = compile_result.stderr
                     self.send_response(self.iopub_socket, 'stream', {
                         'name': 'stderr',
-                        'text': 'Execution timed out (30 seconds limit)'
+                        'text': f'Compilation Error:\n{error_message}'
                     })
                 
                 return {
                     'status': 'error',
                     'execution_count': self.execution_count,
-                    'ename': 'TimeoutError',
-                    'evalue': 'Execution exceeded time limit',
-                    'traceback': ['Execution timed out after 30 seconds']
+                    'ename': 'CompilationError',
+                    'evalue': 'Java compilation failed',
+                    'traceback': [compile_result.stderr]
                 }
             
-            except FileNotFoundError as e:
-                if not silent:
+            # Run compiled Java code
+            run_result = subprocess.run(
+                ['java', '-cp', tmpdir, class_name],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            if not silent:
+                # Send stdout
+                if run_result.stdout:
                     self.send_response(self.iopub_socket, 'stream', {
-                        'name': 'stderr',
-                        'text': f'Error: Java compiler not found. Please install JDK.\n{str(e)}'
+                        'name': 'stdout',
+                        'text': run_result.stdout
                     })
                 
+                # Send stderr
+                if run_result.stderr:
+                    self.send_response(self.iopub_socket, 'stream', {
+                        'name': 'stderr',
+                        'text': run_result.stderr
+                    })
+            
+            if run_result.returncode != 0:
                 return {
                     'status': 'error',
                     'execution_count': self.execution_count,
-                    'ename': 'JavaNotFoundError',
-                    'evalue': 'Java not found',
-                    'traceback': [str(e)]
+                    'ename': 'RuntimeError',
+                    'evalue': 'Java execution failed',
+                    'traceback': [run_result.stderr]
                 }
+            
+        except subprocess.TimeoutExpired:
+            if not silent:
+                self.send_response(self.iopub_socket, 'stream', {
+                    'name': 'stderr',
+                    'text': 'Execution timed out (30 seconds limit)'
+                })
+            
+            return {
+                'status': 'error',
+                'execution_count': self.execution_count,
+                'ename': 'TimeoutError',
+                'evalue': 'Execution exceeded time limit',
+                'traceback': ['Execution timed out after 30 seconds']
+            }
+        
+        except FileNotFoundError as e:
+            if not silent:
+                self.send_response(self.iopub_socket, 'stream', {
+                    'name': 'stderr',
+                    'text': f'Error: Java compiler not found. Please install JDK.\n{str(e)}'
+                })
+            
+            return {
+                'status': 'error',
+                'execution_count': self.execution_count,
+                'ename': 'JavaNotFoundError',
+                'evalue': 'Java not found',
+                'traceback': [str(e)]
+            }
         
         return {
             'status': 'ok',
